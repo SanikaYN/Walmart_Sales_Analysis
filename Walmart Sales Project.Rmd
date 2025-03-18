@@ -1,0 +1,371 @@
+---
+title: "Walmart Sales Analysis"
+output:
+  pdf_document:
+    latex_engine: xelatex
+---
+
+```{r}
+library(ggplot2)
+library(readr)
+library(reshape2)
+library(scales)
+library(viridis)
+library(car)
+library(lubridate)
+library(dplyr)
+library(forecast)
+library(tseries)
+library(prophet)
+library(TSclust)
+library(corrplot)
+```
+
+
+# **Exploratory Data Analysis** 
+
+```{r}
+
+Walmart_Sales <- read_csv("Walmart_Sales.csv")
+
+# Check the structure 
+str(Walmart_Sales)
+
+# Count missing values in each column
+colSums(is.na(Walmart_Sales))
+
+# Summary statistics for all numerical columns
+summary(Walmart_Sales)
+
+# Count unique values in categorical columns
+unique(Walmart_Sales$Store)  # Checked the number of stores
+unique(Walmart_Sales$Holiday_Flag)  # Checked the holiday flags
+
+# Convert Date column to Date format
+Walmart_Sales$Date <- dmy(Walmart_Sales$Date)
+
+# Sales Trend Overtime 
+ggplot(Walmart_Sales, aes(x = Date, y = Weekly_Sales)) +
+  stat_summary(fun = mean, geom = "line", color = "blue", size = 1) +
+  labs(title = "Average Weekly Sales Over Time", x = "Date", y = "Weekly Sales") +
+  theme_minimal()
+
+# Holidays vs Non-Holidays Sales 
+ggplot(Walmart_Sales, aes(x = as.factor(Holiday_Flag), y = Weekly_Sales, fill = as.factor(Holiday_Flag))) +
+  geom_boxplot(outlier.color = "black", outlier.size = 1) + 
+  scale_fill_manual(values = c("steelblue", "orange")) +  
+  scale_y_continuous(labels = scales::comma) +  
+  labs(title = "Sales Distribution: Holidays vs. Non-Holidays", 
+       x = "Holiday (0 = No, 1 = Yes)", y = "Weekly Sales") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(size = 12), 
+        axis.text.y = element_text(size = 12),
+        legend.position = "none")  
+
+# Weekly Distribution of Sales across Stores 
+ggplot(Walmart_Sales, aes(x = as.factor(Store), y = Weekly_Sales, fill = as.factor(Store))) +
+  geom_boxplot(outlier.shape = NA) +  
+  scale_fill_viridis_d(option = "plasma") +  
+  labs(title = "Weekly Sales Distribution Across Stores", 
+       x = "Store ID", y = "Weekly Sales") +
+  scale_y_continuous(labels = scales::comma) +  
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1), 
+        legend.position = "none")  
+
+
+# Histogram of Temperature
+ggplot(Walmart_Sales, aes(x = Temperature)) +
+  geom_histogram(binwidth = 5, fill = "orange", color = "black", alpha = 0.7) +
+  labs(title = "Distribution of Temperature", x = "Temperature (°F)", y = "Frequency") +
+  theme_minimal()
+
+# Histogram of Fuel Price
+ggplot(Walmart_Sales, aes(x = Fuel_Price)) +
+  geom_histogram(binwidth = 0.2, fill = "green", color = "black", alpha = 0.7) +
+  labs(title = "Distribution of Fuel Price", x = "Fuel Price ($ per gallon)", y = "Frequency") +
+  theme_minimal()
+
+# Histogram of CPI
+ggplot(Walmart_Sales, aes(x = CPI)) +
+  geom_histogram(binwidth = 10, fill = "purple", color = "black", alpha = 0.7) +
+  labs(title = "Distribution of Consumer Price Index (CPI)", x = "CPI", y = "Frequency") +
+  theme_minimal()
+
+# Histogram of Unemployment Rate
+ggplot(Walmart_Sales, aes(x = Unemployment)) +
+  geom_histogram(binwidth = 0.5, fill = "red", color = "black", alpha = 0.7) +
+  labs(title = "Distribution of Unemployment Rate", x = "Unemployment Rate (%)", y = "Frequency") +
+  theme_minimal()
+```
+
+
+## **Holiday Impact on Sales – Is there a significant relationship between holidays and higher
+sales? (Chi-Square test)**
+```{r}
+# Categorize sales as 'High' or 'Low' based on the median
+median_sales <- median(df$Weekly_Sales, na.rm = TRUE)
+df$Sales_Category <- ifelse(df$Weekly_Sales >= median_sales, "High", "Low")
+
+# Create a contingency table
+sales_holiday_table <- table(df$Sales_Category, df$Holiday_Flag)
+
+# Perform the chi-square test
+chi_test <- chisq.test(sales_holiday_table)
+
+# Print the chi-square test result
+print(chi_test)
+
+# Convert Holiday_Flag to factor for better labeling
+df$Holiday_Flag <- factor(df$Holiday_Flag, labels = c("Non-Holiday", "Holiday"))
+
+# Create a bar plot to visualize the relationship
+ggplot(df, aes(x = Holiday_Flag, fill = Sales_Category)) +
+  geom_bar(position = "dodge") +
+  labs(title = "Impact of Holidays on Sales",
+       x = "Holiday Indicator",
+       y = "Count of Weeks",
+       fill = "Sales Category") +
+  theme_minimal()
+```
+
+
+## **External Factors & Sales – How do temperature, fuel price, and unemployment affect sales? (ANOVA)**
+```{r}
+# Check for missing values and remove them if necessary
+df <- na.omit(df)
+
+# Perform ANOVA: Weekly_Sales as dependent variable, External Factors as independent variables
+anova_model <- aov(Weekly_Sales ~ Temperature + Fuel_Price + Unemployment, data = df)
+
+# Summary of the ANOVA model
+summary(anova_model)
+
+# Boxplots to visualize relationships between external factors and sales
+
+# Temperature vs Weekly Sales
+ggplot(df, aes(x = factor(cut(Temperature, breaks=4)), y = Weekly_Sales)) +
+  geom_boxplot() +
+  labs(title = "Effect of Temperature on Sales", x = "Temperature Ranges", y = "Weekly Sales") +
+  theme_minimal()
+
+# Fuel Price vs Weekly Sales
+ggplot(df, aes(x = factor(cut(Fuel_Price, breaks=4)), y = Weekly_Sales)) +
+  geom_boxplot() +
+  labs(title = "Effect of Fuel Price on Sales", x = "Fuel Price Ranges", y = "Weekly Sales") +
+  theme_minimal()
+
+# Unemployment vs Weekly Sales
+ggplot(df, aes(x = factor(cut(Unemployment, breaks=4)), y = Weekly_Sales)) +
+  geom_boxplot() +
+  labs(title = "Effect of Unemployment on Sales", x = "Unemployment Ranges", y = "Weekly Sales") +
+  theme_minimal()
+```
+
+
+## **Store Performance Comparison – Do sales vary significantly between stores? (ANOVA)**
+```{r}
+# Convert Date to proper format
+sales_data$Date <- as.Date(sales_data$Date, format="%d-%m-%Y") 
+
+# Aggregate sales per store per week
+weekly_sales <- sales_data %>%
+  group_by(Store, Date) %>%
+  summarise(Weekly_Sales = sum(Weekly_Sales), .groups = "drop")
+
+# ---- ANOVA Test ----
+anova_model <- aov(Weekly_Sales ~ factor(Store), data = weekly_sales)
+anova_results <- summary(anova_model)
+
+print("ANOVA Results:")
+print(anova_results)
+
+# Check for significant differences
+if (anova_results[[1]]["factor(Store)", "Pr(>F)"] < 0.05) {
+  print("Significant differences found between stores. Performing Tukey HSD test.")
+  
+  # Tukey HSD post-hoc test
+  tukey_result <- TukeyHSD(anova_model)
+  print(tukey_result)
+} else {
+  print("No significant differences found between stores.")
+}
+
+# Visualizations: 
+
+# Facet Grid: Store-wise Time Trends
+# Aggregate sales data by date and store
+sales_trend <- weekly_sales %>%
+  group_by(Store, Date) %>%
+  summarise(Total_Sales = sum(Weekly_Sales), .groups = "drop")
+
+# Plot of Sales Trends for Each Store
+ggplot(sales_trend, aes(x = Date, y = Total_Sales)) +
+  geom_line(color = "blue") +
+  facet_wrap(~ Store, scales = "free_y") +
+  labs(title = "Sales Trends for Each Store",
+       x = "Date",
+       y = "Total Sales") +
+  theme_minimal()
+
+# Bar Chart: Average Weekly Sales per Store
+# Aggregate mean weekly sales per store
+store_means <- weekly_sales %>%
+  group_by(Store) %>%
+  summarise(Mean_Sales = mean(Weekly_Sales), .groups = "drop")
+
+# Order stores by sales and plot
+ggplot(store_means, aes(x = reorder(factor(Store), -Mean_Sales), y = Mean_Sales, 
+                        fill = factor(Store))) +
+  geom_bar(stat = "identity") +
+  labs(title = "Average Weekly Sales per Store",
+       x = "Store",
+       y = "Mean Weekly Sales ($)",
+       fill = "Store") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),  
+        legend.position = "none")  
+```
+
+
+## **Unemployment & Sales – Does unemployment rate impact weekly sales? (Liner Regression)** 
+```{r}
+# Plot Unemployment vs Weekly Sales
+ggplot(Walmart_Sales, aes(x=Unemployment, y=Weekly_Sales)) +
+  geom_point(alpha=0.5) +
+  geom_smooth(method="lm", col="blue") +
+  labs(title="Unemployment vs Weekly Sales",
+       x="Unemployment Rate",
+       y="Weekly Sales")
+
+head(Walmart_Sales)
+
+# Fit linear regression model
+model <- lm(Weekly_Sales ~ Unemployment, data=Walmart_Sales)
+
+# View summary of the model
+summary(model)
+
+# Plot diagnostic plots
+par(mfrow=c(2,2))
+plot(model)
+
+
+# Fit a multiple linear regression model
+model_multi <- lm(Weekly_Sales ~ Unemployment + Fuel_Price + Temperature + CPI + Holiday_Flag, data=Walmart_Sales)
+
+# Display the model summary
+summary(model_multi)
+
+# Fit the new multiple linear regression model (without Fuel Price)
+model_refined <- lm(Weekly_Sales ~ Unemployment + Temperature + CPI + Holiday_Flag, data=Walmart_Sales)
+
+# Display the updated model summary
+summary(model_refined)
+
+# Check multicollinearity using Variance Inflation Factor (VIF)
+vif(model_multi)
+
+# Plot diagnostics
+par(mfrow = c(2, 2))
+plot(model_multi)
+
+# Residual diagnostics
+par(mfrow = c(2,2))  # Arrange diagnostic plots
+plot(model_multi)  # Check linearity, homoscedasticity, and normality of residuals
+
+# Create a new dataset for prediction
+new_data <- data.frame(
+  Unemployment = c(6.5, 7.0, 7.5),
+  Fuel_Price = mean(Walmart_Sales$Fuel_Price),
+  Temperature = mean(Walmart_Sales$Temperature),
+  CPI = mean(Walmart_Sales$CPI),
+  Holiday_Flag = 0  # Assuming a non-holiday week
+)
+
+# Predict weekly sales
+predictions_multi <- predict(model_multi, newdata = new_data)
+print(predictions_multi)
+
+
+# Compute RMSE (Root Mean Squared Error)
+rmse <- sqrt(mean(residuals(model_multi)^2))
+print(paste("RMSE:", round(rmse, 2)))
+
+# Compute Mean Absolute Error (MAE)
+mae <- mean(abs(residuals(model_multi)))
+print(paste("MAE:", round(mae, 2)))
+
+# Compute Mean Absolute Percentage Error (MAPE)
+mape <- mean(abs(residuals(model_multi) / Walmart_Sales$Weekly_Sales)) * 100
+print(paste("MAPE:", round(mape, 2), "%"))
+
+# Compute R-Squared
+r_squared <- summary(model_multi)$r.squared
+print(paste("R-squared:", round(r_squared, 4)))
+```
+
+
+## **Sales Trends Over Time – How do sales fluctuate seasonally or over time? (Time series analysis)** 
+```{r}
+# Convert Date column to Date format
+df$Date <- as.Date(df$Date, format="%d-%m-%Y")
+
+# Aggregate sales by date
+sales_ts <- df %>% 
+  group_by(Date) %>% 
+  summarise(Total_Sales = sum(Weekly_Sales))
+
+# Convert to time series object
+sales_ts_ts <- ts(sales_ts$Total_Sales, start=c(year(min(sales_ts$Date)), month(min(sales_ts$Date))), frequency=52)
+
+
+# Original Time Series Plot
+ggplot(sales_ts, aes(x=Date, y=Total_Sales)) +
+  geom_line(color="blue", size=1) +
+  geom_smooth(method="loess", color="red", se=FALSE) +
+  labs(title="Walmart Weekly Sales Over Time", x="Date", y="Total Sales") +
+  theme_minimal()
+
+# STL Decomposition
+decomp <- stl(sales_ts_ts, s.window="periodic")
+decomp_df <- data.frame(
+  Date = rep(sales_ts$Date, 4),
+  Value = c(decomp$time.series[,"seasonal"], decomp$time.series[,"trend"], decomp$time.series[,"remainder"], sales_ts$Total_Sales),
+  Component = rep(c("Seasonal", "Trend", "Remainder", "Observed"), each = length(sales_ts$Date))
+)
+
+ggplot(decomp_df, aes(x=Date, y=Value, color=Component)) +
+  geom_line(size=1) +
+  facet_wrap(~ Component, scales="free_y", ncol=1) +
+  labs(title="STL Decomposition of Walmart Weekly Sales", x="Date", y="Value") +
+  theme_minimal() +
+  theme(legend.position="none")
+
+# Correlation analysis with external factors
+cor_matrix <- cor(df[, c("Weekly_Sales", "Temperature", "Fuel_Price", "CPI", "Unemployment")], use="complete.obs")
+corrplot(cor_matrix, method="circle")
+
+# Perform Augmented Dickey-Fuller Test to check stationarity
+adf_test <- adf.test(sales_ts_ts)
+print(adf_test)
+
+# Only apply differencing if p-value > 0.05 (indicating non-stationary data)
+if (adf_test$p.value > 0.05) {
+  sales_diff <- diff(sales_ts_ts, differences=1)
+  adf_test_diff <- adf.test(sales_diff)
+  print(adf_test_diff)
+} else {
+  print("Time series is already stationary. No differencing needed.")
+}
+
+# Fit an ARIMA model
+fit <- auto.arima(sales_ts_ts, d=0)
+summary(fit)
+
+# Forecast future sales using ARIMA
+forecasted_values <- forecast(fit, h=12)
+plot(forecasted_values)
+checkresiduals(fit)
+```
+
